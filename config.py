@@ -22,3 +22,9 @@ OUTPUT_DEVICE = None
 
 RECORDING_DIR.mkdir(parents=True, exist_ok=True)
 RESULT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# GUI录音配置
+MAX_RECORD_SECONDS = 60
+RECORD_PREVIEW_SECONDS = 2
+GUI_UPDATE_INTERVAL = 100

@@ -14,4 +14,20 @@ def normalize_audio(audio, peak=0.95):
         return audio.copy()  # 避免除以零
     normalization_factor = peak / max_val
     return audio * normalization_factor
-    
+
+
+def add_white_noise(audio, snr_db):
+    audio = np.asarray(audio, dtype=np.float32)
+
+    signal_power = np.mean(audio ** 2)
+    if signal_power == 0:
+        return audio.copy()
+
+    snr_linear = 10 ** (snr_db / 10)
+    noise_power = (signal_power / snr_linear)
+
+    noise = np.random.normal(0, np.sqrt(noise_power), size=audio.shape)
+
+    noisy_audio = (audio + noise)
+
+    return np.asarray(noisy_audio, dtype=np.float32)
