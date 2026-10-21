@@ -1,0 +1,24 @@
+# Python缓存
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# PyInstaller打包文件
+dist/
+build/
+
+# 临时文件
+*.log
+
+# 运行产生的音频
+data/recordings/
+results/
+
+# 模型权重
+models/*.pt
+models/*.pth

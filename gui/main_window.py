@@ -1,12 +1,10 @@
 
 from pathlib import Path
 from datetime import datetime
-from math import gcd
-import numpy as np
-import sounddevice as sd
 
-from scipy.signal import resample_poly
-from PySide6.QtCore import Qt, QTimer, QElapsedTimer, QThread, Slot
+import numpy as np
+
+from PySide6.QtCore import Qt, QTimer, QThread, Slot
 from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -18,6 +16,8 @@ from PySide6.QtWidgets import (
     QFrame,
     QComboBox,
     QSlider,
+    QTabWidget,
+    QSplitter,
     QFileDialog,
     QMessageBox
 )
@@ -32,15 +32,18 @@ from config import (
 
 from audio.devices import get_audio_devices, get_input_sample_rate
 from audio.recorder import StreamRecorder
+from audio.player import StreamPlayer
 from audio.wav_io import load_audio, save_audio
-from audio.player import play_audio_async, stop_audio
 
 from dsp.enhance import apply_gain, normalize_audio
 from dsp.filter import lowpass_filter, highpass_filter, bandpass_filter
 from dsp.denoise import spectral_subtraction
+from dsp.equalizer import three_band_eq
+from dsp.effects import apply_preset, add_echo, change_speed, change_pitch
 
 from gui.plot_panel import AudioAnalysisPanel
 from gui.control_panel import DSPControlPanel
+from gui.effects_panel import EffectsPanel
 from gui.workers import DSPWorker
 
 
@@ -48,22 +51,29 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
+        # 音频数据
         self.original_audio = None
         self.processed_audio = None
         self.sample_rate = None
         self.file_path = None
         self.operations = []
 
-        # DSP后台线程与撤销记录
+        # 各处理阶段的音频快照
+        self.version_snapshots = {}
+
+        # DSP后台线程
         self.is_processing = False
         self.processing_thread = None
         self.processing_worker = None
         self.processing_description = ""
+        self.processing_stage = ""
         self.processing_snapshot = None
+
+        # 撤销历史
         self.undo_stack = []
         self.max_undo_steps = 5
 
-        # 录音状态
+        # 录音模块
         self.recorder = StreamRecorder()
         self.record_preview = np.empty(0, dtype=np.float32)
 
@@ -71,14 +81,11 @@ class MainWindow(QMainWindow):
         self.record_timer.setInterval(GUI_UPDATE_INTERVAL)
         self.record_timer.timeout.connect(self.update_recording)
 
-        # 播放状态
-        self.playback_audio = None
+        # 新版流式播放器
+        self.player = StreamPlayer()
         self.playback_name = ""
         self.playback_duration = 0.0
-        self.playback_start = 0.0
-        self.is_playing = False
 
-        self.play_elapsed = QElapsedTimer()
         self.play_timer = QTimer(self)
         self.play_timer.setInterval(GUI_UPDATE_INTERVAL)
         self.play_timer.timeout.connect(self.update_playback)
@@ -86,10 +93,14 @@ class MainWindow(QMainWindow):
         self.init_ui()
 
 
+    # ==========================================
+    # 主界面
+    # ==========================================
+
     def init_ui(self):
 
-        self.setWindowTitle("Smart Voice Studio")
-        self.resize(1350, 850)
+        self.setWindowTitle("Smart Voice Studio V0.7")
+        self.resize(1450, 880)
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -98,7 +109,7 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(8, 8, 8, 8)
         main_layout.setSpacing(10)
 
-        # 左侧滚动控制区域
+        # 左侧滚动区域
         left_scroll = QScrollArea()
         left_scroll.setWidgetResizable(True)
         left_scroll.setFixedWidth(355)
@@ -106,8 +117,6 @@ class MainWindow(QMainWindow):
         left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         left_panel = QWidget()
-        left_panel.setObjectName("leftPanel")
-
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(16, 16, 16, 16)
         left_layout.setSpacing(12)
@@ -119,7 +128,7 @@ class MainWindow(QMainWindow):
         subtitle = QLabel("智能人声音效处理平台")
         left_layout.addWidget(subtitle)
 
-        # 音频设备管理
+        # 音频设备
         device_title = QLabel("音频设备管理")
         device_title.setStyleSheet("font-size: 16px; font-weight: bold;")
         left_layout.addWidget(device_title)
@@ -134,7 +143,7 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.output_combo)
         left_layout.addWidget(self.refresh_button)
 
-        # 麦克风录音
+        # 录音
         record_title = QLabel("麦克风录音")
         record_title.setStyleSheet("font-size: 16px; font-weight: bold;")
         left_layout.addWidget(record_title)
@@ -151,20 +160,32 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.record_time_label)
 
         # 音频管理
-        audio_title = QLabel("音频管理")
+        audio_title = QLabel("音频管理与播放")
         audio_title.setStyleSheet("font-size: 16px; font-weight: bold;")
         left_layout.addWidget(audio_title)
 
         self.open_button = QPushButton("导入 WAV 音频")
         self.play_original_button = QPushButton("播放原声")
         self.play_processed_button = QPushButton("播放处理后")
+        self.play_selected_button = QPushButton("播放当前选中版本")
+        self.pause_button = QPushButton("暂停播放")
         self.stop_button = QPushButton("停止播放")
         self.save_button = QPushButton("保存处理结果")
 
         left_layout.addWidget(self.open_button)
-        left_layout.addWidget(self.play_original_button)
-        left_layout.addWidget(self.play_processed_button)
-        left_layout.addWidget(self.stop_button)
+
+        playback_layout = QHBoxLayout()
+        playback_layout.addWidget(self.play_original_button)
+        playback_layout.addWidget(self.play_processed_button)
+        left_layout.addLayout(playback_layout)
+
+        left_layout.addWidget(self.play_selected_button)
+
+        transport_layout = QHBoxLayout()
+        transport_layout.addWidget(self.pause_button)
+        transport_layout.addWidget(self.stop_button)
+        left_layout.addLayout(transport_layout)
+
         left_layout.addWidget(self.save_button)
 
         # 播放进度
@@ -173,10 +194,11 @@ class MainWindow(QMainWindow):
         self.progress_slider.setValue(0)
 
         self.progress_label = QLabel("00:00 / 00:00")
+
         left_layout.addWidget(self.progress_slider)
         left_layout.addWidget(self.progress_label)
 
-        # 音频文件信息
+        # 文件信息
         info_title = QLabel("音频文件信息")
         info_title.setStyleSheet("font-size: 16px; font-weight: bold;")
         left_layout.addWidget(info_title)
@@ -185,48 +207,105 @@ class MainWindow(QMainWindow):
         self.file_info.setWordWrap(True)
         left_layout.addWidget(self.file_info)
 
-        # 原声与处理后图形切换
-        view_title = QLabel("可视化信号选择")
-        view_title.setStyleSheet("font-size: 16px; font-weight: bold;")
-        left_layout.addWidget(view_title)
+        # 音频版本管理
+        version_title = QLabel("音频版本管理")
+        version_title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        left_layout.addWidget(version_title)
 
         self.view_combo = QComboBox()
-        self.view_combo.addItems(["原声", "处理后"])
+        self.view_combo.addItem("原声", "original")
+        self.view_combo.addItem("当前处理", "processed")
         left_layout.addWidget(self.view_combo)
 
         self.process_info = QLabel("当前处理：无")
         self.process_info.setWordWrap(True)
         left_layout.addWidget(self.process_info)
 
-        # DSP参数控制区域
+        # DSP控制
         self.control_panel = DSPControlPanel()
         left_layout.addWidget(self.control_panel)
-        left_layout.addStretch()
 
+        # 音效控制
+        self.effects_panel = EffectsPanel()
+        left_layout.addWidget(self.effects_panel)
+
+        left_layout.addStretch()
         left_scroll.setWidget(left_panel)
 
-        # 右侧音频三联分析图
+        # ==========================================
+        # 右侧标签页
+        # ==========================================
+
+        self.analysis_tabs = QTabWidget()
+
+        # 标签页一：单路三联分析
         self.analysis_panel = AudioAnalysisPanel()
+        self.analysis_tabs.addTab(self.analysis_panel, "单路信号分析")
+
+        # 标签页二：原声和处理后的双列对比
+        compare_widget = QWidget()
+        compare_layout = QHBoxLayout(compare_widget)
+        compare_layout.setContentsMargins(6, 6, 6, 6)
+
+        compare_splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        original_column = QWidget()
+        original_layout = QVBoxLayout(original_column)
+        original_layout.setContentsMargins(3, 3, 3, 3)
+
+        original_label = QLabel("原始音频")
+        original_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        original_label.setStyleSheet("font-size: 15px; font-weight: bold;")
+
+        self.compare_original_panel = AudioAnalysisPanel()
+        original_layout.addWidget(original_label)
+        original_layout.addWidget(self.compare_original_panel)
+
+        result_column = QWidget()
+        result_layout = QVBoxLayout(result_column)
+        result_layout.setContentsMargins(3, 3, 3, 3)
+
+        self.compare_result_label = QLabel("当前处理结果")
+        self.compare_result_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.compare_result_label.setStyleSheet("font-size: 15px; font-weight: bold;")
+
+        self.compare_result_panel = AudioAnalysisPanel()
+        result_layout.addWidget(self.compare_result_label)
+        result_layout.addWidget(self.compare_result_panel)
+
+        compare_splitter.addWidget(original_column)
+        compare_splitter.addWidget(result_column)
+        compare_splitter.setSizes([500, 500])
+
+        compare_layout.addWidget(compare_splitter)
+        self.analysis_tabs.addTab(compare_widget, "处理前后对比")
 
         main_layout.addWidget(left_scroll)
-        main_layout.addWidget(self.analysis_panel, stretch=1)
+        main_layout.addWidget(self.analysis_tabs, stretch=1)
 
-        # 音频设备与录音
+        # ==========================================
+        # 按钮信号连接
+        # ==========================================
+
         self.refresh_button.clicked.connect(self.refresh_devices)
         self.output_combo.currentIndexChanged.connect(self.on_output_changed)
+
         self.record_button.clicked.connect(self.start_recording)
         self.stop_record_button.clicked.connect(self.stop_recording)
 
-        # 音频播放与文件管理
         self.open_button.clicked.connect(self.open_audio_file)
         self.play_original_button.clicked.connect(self.play_original)
         self.play_processed_button.clicked.connect(self.play_processed)
-        self.stop_button.clicked.connect(self.stop_playback)
+        self.play_selected_button.clicked.connect(self.play_selected)
+        self.pause_button.clicked.connect(self.toggle_pause)
+        self.stop_button.clicked.connect(lambda: self.stop_playback())
         self.save_button.clicked.connect(self.save_processed_audio)
+
         self.progress_slider.sliderReleased.connect(self.seek_playback)
         self.view_combo.currentIndexChanged.connect(self.update_visualization)
+        self.analysis_tabs.currentChanged.connect(self.update_visualization)
 
-        # DSP功能
+        # DSP
         self.control_panel.gain_button.clicked.connect(self.apply_gain_processing)
         self.control_panel.normalize_button.clicked.connect(self.apply_normalization)
         self.control_panel.filter_button.clicked.connect(self.apply_filter_processing)
@@ -234,26 +313,45 @@ class MainWindow(QMainWindow):
         self.control_panel.undo_button.clicked.connect(self.undo_processing)
         self.control_panel.reset_button.clicked.connect(self.reset_processing)
 
+        # 音效
+        self.effects_panel.preset_button.clicked.connect(self.apply_effect_preset)
+        self.effects_panel.eq_button.clicked.connect(self.apply_eq_processing)
+        self.effects_panel.eq_reset_button.clicked.connect(
+            self.effects_panel.reset_eq_parameters
+        )
+        self.effects_panel.echo_button.clicked.connect(self.apply_echo_processing)
+        self.effects_panel.speed_button.clicked.connect(self.apply_speed_processing)
+        self.effects_panel.pitch_button.clicked.connect(self.apply_pitch_processing)
+
+        # 初始化
         self.set_audio_controls(False)
         self.stop_record_button.setEnabled(False)
         self.refresh_devices()
 
-        self.statusBar().showMessage("就绪，请导入音频或开始录音")
+        self.statusBar().showMessage("就绪，请录音或导入 WAV")
 
+
+    # ==========================================
+    # 控件状态
+    # ==========================================
 
     def set_audio_controls(self, enabled):
 
         self.play_original_button.setEnabled(enabled)
         self.play_processed_button.setEnabled(enabled)
+        self.play_selected_button.setEnabled(enabled)
         self.save_button.setEnabled(enabled)
         self.view_combo.setEnabled(enabled)
         self.control_panel.setEnabled(enabled)
-        self.progress_slider.setEnabled(enabled)
-        self.stop_button.setEnabled(False)
+        self.effects_panel.setEnabled(enabled)
 
         self.control_panel.undo_button.setEnabled(
             enabled and len(self.undo_stack) > 0
         )
+
+        self.pause_button.setEnabled(False)
+        self.stop_button.setEnabled(False)
+        self.progress_slider.setEnabled(False)
 
 
     def set_processing_controls(self, enabled):
@@ -269,7 +367,7 @@ class MainWindow(QMainWindow):
 
 
     # ==========================================
-    # 音频设备管理
+    # 音频设备
     # ==========================================
 
     def refresh_devices(self):
@@ -299,11 +397,12 @@ class MainWindow(QMainWindow):
             for index, name in output_devices:
                 self.output_combo.addItem(name, index)
 
-            input_index = self.input_combo.findData(input_selected)
-            output_index = self.output_combo.findData(output_selected)
-
-            self.input_combo.setCurrentIndex(max(input_index, 0))
-            self.output_combo.setCurrentIndex(max(output_index, 0))
+            self.input_combo.setCurrentIndex(
+                max(0, self.input_combo.findData(input_selected))
+            )
+            self.output_combo.setCurrentIndex(
+                max(0, self.output_combo.findData(output_selected))
+            )
 
             self.statusBar().showMessage("音频设备列表已更新")
 
@@ -317,7 +416,7 @@ class MainWindow(QMainWindow):
 
     def on_output_changed(self, index):
 
-        if self.is_playing:
+        if self.player.is_active:
             self.stop_playback()
 
         self.statusBar().showMessage("输出设备已更新")
@@ -354,6 +453,8 @@ class MainWindow(QMainWindow):
             self.refresh_button.setEnabled(False)
 
             self.record_time_label.setText("录音时长：00:00.0")
+            self.analysis_tabs.setCurrentIndex(0)
+
             self.analysis_panel.clear_audio()
             self.analysis_panel.waveform_plot.setTitle("Recording - Last 2 Seconds")
 
@@ -361,6 +462,23 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"正在录音：{sample_rate} Hz")
 
         except Exception as error:
+            if self.recorder.is_recording:
+                try:
+                    self.recorder.stop()
+                except Exception:
+                    pass
+
+            self.record_timer.stop()
+            self.record_button.setEnabled(True)
+            self.stop_record_button.setEnabled(False)
+            self.open_button.setEnabled(True)
+            self.input_combo.setEnabled(True)
+            self.output_combo.setEnabled(True)
+            self.refresh_button.setEnabled(True)
+
+            self.set_audio_controls(self.original_audio is not None)
+            self.update_visualization()
+
             QMessageBox.critical(self, "录音启动失败", str(error))
 
 
@@ -372,7 +490,9 @@ class MainWindow(QMainWindow):
         new_audio = self.recorder.read_available()
 
         if len(new_audio) > 0:
-            self.record_preview = np.concatenate((self.record_preview, new_audio))
+            self.record_preview = np.concatenate(
+                (self.record_preview, new_audio)
+            )
 
             max_samples = int(RECORD_PREVIEW_SECONDS * self.recorder.sample_rate)
             self.record_preview = self.record_preview[-max_samples:]
@@ -435,14 +555,33 @@ class MainWindow(QMainWindow):
             self.input_combo.setEnabled(True)
             self.output_combo.setEnabled(True)
             self.refresh_button.setEnabled(True)
-
             self.set_audio_controls(self.original_audio is not None)
+
             self.analysis_panel.waveform_plot.setTitle("Waveform")
 
 
     # ==========================================
-    # 音频文件管理
+    # 音频文件信息
     # ==========================================
+
+    def update_file_info(self):
+
+        if self.original_audio is None:
+            self.file_info.setText("尚未导入音频")
+            return
+
+        original_duration = len(self.original_audio) / self.sample_rate
+        processed_duration = len(self.processed_audio) / self.sample_rate
+
+        self.file_info.setText(
+            f"文件名：{self.file_path.name}\n"
+            f"采样率：{self.sample_rate} Hz\n"
+            f"原声时长：{original_duration:.2f} s\n"
+            f"处理后时长：{processed_duration:.2f} s\n"
+            f"原声采样点数：{len(self.original_audio)}\n"
+            f"处理后采样点数：{len(self.processed_audio)}"
+        )
+
 
     def load_audio_data(self, audio, sample_rate, file_path):
 
@@ -452,7 +591,7 @@ class MainWindow(QMainWindow):
             raise ValueError("音频数据无效")
 
         if not np.all(np.isfinite(audio)):
-            raise ValueError("音频存在无效采样值")
+            raise ValueError("音频包含无效采样值")
 
         self.stop_playback()
 
@@ -461,32 +600,20 @@ class MainWindow(QMainWindow):
         self.sample_rate = sample_rate
         self.file_path = Path(file_path)
 
-        # 清空上一段音频的处理历史
         self.operations.clear()
         self.undo_stack.clear()
+        self.version_snapshots.clear()
         self.processing_snapshot = None
 
-        duration = len(audio) / sample_rate
-
-        self.file_info.setText(
-            f"文件名：{self.file_path.name}\n"
-            f"采样率：{sample_rate} Hz\n"
-            f"采样点数：{len(audio)}\n"
-            f"时长：{duration:.2f} s\n"
-            f"处理声道：单声道"
-        )
-
         self.process_info.setText("当前处理：无")
+        self.update_file_info()
+
+        self.refresh_version_combo("original")
         self.set_audio_controls(True)
 
-        self.playback_audio = None
-        self.playback_duration = duration
-        self.update_progress_display(0, duration)
-
-        self.view_combo.setCurrentIndex(0)
+        self.playback_duration = len(audio) / sample_rate
+        self.update_progress_display(0, self.playback_duration)
         self.update_visualization()
-
-        self.control_panel.undo_button.setEnabled(False)
 
 
     def open_audio_file(self):
@@ -513,128 +640,235 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "音频加载失败", str(error))
 
 
+    # ==========================================
+    # 多版本音频管理
+    # ==========================================
+
+    def refresh_version_combo(self, selected_key=None):
+
+        if selected_key is None:
+            selected_key = self.view_combo.currentData()
+
+        self.view_combo.blockSignals(True)
+        self.view_combo.clear()
+
+        self.view_combo.addItem("原声", "original")
+        self.view_combo.addItem("当前处理", "processed")
+
+        version_labels = [
+            ("denoise", "去噪结果"),
+            ("enhance", "增强结果"),
+            ("effect", "音效结果")
+        ]
+
+        for key, label in version_labels:
+            if key in self.version_snapshots:
+                self.view_combo.addItem(label, key)
+
+        index = self.view_combo.findData(selected_key)
+
+        if index < 0:
+            index = 1
+
+        self.view_combo.setCurrentIndex(index)
+        self.view_combo.blockSignals(False)
+
+
+    def get_audio_by_key(self, key):
+
+        if key == "original":
+            return self.original_audio, "原声"
+
+        if key == "processed":
+            return self.processed_audio, "当前处理"
+
+        version_labels = {
+            "denoise": "去噪结果",
+            "enhance": "增强结果",
+            "effect": "音效结果"
+        }
+
+        audio = self.version_snapshots.get(key)
+        name = version_labels.get(key, "未知版本")
+
+        return audio, name
+
+
+    def get_selected_audio(self):
+
+        return self.get_audio_by_key(self.view_combo.currentData())
+
+
     def update_visualization(self, index=None):
 
         if self.original_audio is None or self.recorder.is_recording:
             return
 
-        if self.view_combo.currentIndex() == 0:
-            audio = self.original_audio
-            name = "原声"
-        else:
-            audio = self.processed_audio
-            name = "处理后"
+        audio, name = self.get_selected_audio()
 
-        self.analysis_panel.show_audio(audio, self.sample_rate)
+        if audio is None:
+            return
+
+        # 单路分析
+        if self.analysis_tabs.currentIndex() == 0:
+            self.analysis_panel.show_audio(audio, self.sample_rate)
+
+        # 原声与选中版本双列对比
+        else:
+            self.compare_original_panel.show_audio(
+                self.original_audio, self.sample_rate
+            )
+            self.compare_result_panel.show_audio(
+                audio, self.sample_rate
+            )
+            self.compare_result_label.setText(name)
+
         self.statusBar().showMessage(f"当前显示：{name}")
 
 
     # ==========================================
-    # 音频播放与进度管理
+    # 新版播放器
     # ==========================================
 
     def play_original(self):
 
-        self.playback_audio = self.original_audio
-        self.playback_name = "原声"
-        self.start_playback(0)
+        if self.original_audio is not None:
+            self.start_playback(self.original_audio, "原声")
 
 
     def play_processed(self):
 
-        self.playback_audio = self.processed_audio
-        self.playback_name = "处理后"
-        self.start_playback(0)
+        if self.processed_audio is not None:
+            self.start_playback(self.processed_audio, "当前处理")
 
 
-    def start_playback(self, start_seconds=0):
+    def play_selected(self):
 
-        if self.playback_audio is None or self.recorder.is_recording or self.is_processing:
+        audio, name = self.get_selected_audio()
+
+        if audio is not None:
+            self.start_playback(audio, name)
+
+
+    def start_playback(self, audio, name):
+
+        if audio is None or self.recorder.is_recording or self.is_processing:
             return
 
-        self.stop_playback(reset_progress=False)
+        self.stop_playback()
 
         try:
-            audio = self.playback_audio
-            self.playback_duration = len(audio) / self.sample_rate
-
-            if start_seconds >= self.playback_duration:
-                start_seconds = 0
-
-            start_seconds = max(0, start_seconds)
-            start_sample = int(start_seconds * self.sample_rate)
-
-            playback_audio = audio[start_sample:]
-            playback_rate = self.sample_rate
             output_device = self.output_combo.currentData()
 
-            # 如果设备不支持原采样率，则重采样播放
-            try:
-                sd.check_output_settings(
-                    device=output_device,
-                    channels=1,
-                    samplerate=playback_rate,
-                    dtype="float32"
-                )
-
-            except (sd.PortAudioError, ValueError):
-                device_info = sd.query_devices(output_device, "output")
-                target_rate = int(round(device_info["default_samplerate"]))
-
-                if target_rate <= 0:
-                    raise ValueError("输出设备采样率无效")
-
-                sd.check_output_settings(
-                    device=output_device,
-                    channels=1,
-                    samplerate=target_rate,
-                    dtype="float32"
-                )
-
-                factor = gcd(playback_rate, target_rate)
-                playback_audio = resample_poly(
-                    playback_audio,
-                    target_rate // factor,
-                    playback_rate // factor
-                ).astype(np.float32)
-
-                playback_rate = target_rate
-
-            play_audio_async(
-                playback_audio,
-                playback_rate,
-                output_device=output_device
+            self.player.start(
+                audio,
+                self.sample_rate,
+                device=output_device
             )
 
-            self.playback_start = start_seconds
-            self.play_elapsed.start()
-            self.is_playing = True
-            self.play_timer.start()
+            self.playback_name = name
+            self.playback_duration = self.player.get_duration()
 
             self.play_original_button.setEnabled(False)
             self.play_processed_button.setEnabled(False)
-            self.stop_button.setEnabled(True)
+            self.play_selected_button.setEnabled(False)
 
-            self.update_progress_display(start_seconds, self.playback_duration)
-            self.statusBar().showMessage(f"正在播放：{self.playback_name}")
+            self.pause_button.setText("暂停播放")
+            self.pause_button.setEnabled(True)
+            self.stop_button.setEnabled(True)
+            self.progress_slider.setEnabled(True)
+
+            self.play_timer.start()
+            self.update_progress_display(0, self.playback_duration)
+
+            self.statusBar().showMessage(f"正在播放：{name}")
 
         except Exception as error:
             self.stop_playback()
             QMessageBox.critical(self, "音频播放失败", str(error))
 
 
-    def update_playback(self):
+    def toggle_pause(self):
 
-        if not self.is_playing:
+        if not self.player.is_active:
             return
 
-        elapsed = self.play_elapsed.elapsed() / 1000
-        position = min(self.playback_start + elapsed, self.playback_duration)
+        if self.player.is_paused:
+            self.player.resume()
+            self.pause_button.setText("暂停播放")
+            self.play_timer.start()
+            self.statusBar().showMessage(f"继续播放：{self.playback_name}")
 
-        self.update_progress_display(position, self.playback_duration)
+        else:
+            self.player.pause()
+            self.pause_button.setText("继续播放")
+            self.play_timer.stop()
+            self.statusBar().showMessage(f"已暂停：{self.playback_name}")
 
-        if position >= self.playback_duration:
+        self.update_progress_display(
+            self.player.get_position(),
+            self.player.get_duration()
+        )
+
+
+    def update_playback(self):
+
+        if not self.player.is_active:
+            return
+
+        position = self.player.get_position()
+        duration = self.player.get_duration()
+
+        self.update_progress_display(position, duration)
+
+        if self.player.is_finished:
             self.on_playback_finished()
+
+
+    def seek_playback(self):
+
+        if not self.player.is_active:
+            return
+
+        duration = self.player.get_duration()
+        position = self.progress_slider.value() / 1000 * duration
+
+        self.player.seek(position)
+        self.update_progress_display(position, duration)
+
+        if self.player.is_finished:
+            self.on_playback_finished()
+
+
+    def stop_playback(self, reset_progress=True):
+
+        self.play_timer.stop()
+        self.player.stop()
+
+        enabled = self.original_audio is not None
+        enabled = enabled and not self.recorder.is_recording and not self.is_processing
+
+        self.play_original_button.setEnabled(enabled)
+        self.play_processed_button.setEnabled(enabled)
+        self.play_selected_button.setEnabled(enabled)
+
+        self.pause_button.setText("暂停播放")
+        self.pause_button.setEnabled(False)
+        self.stop_button.setEnabled(False)
+        self.progress_slider.setEnabled(False)
+
+        if reset_progress:
+            self.update_progress_display(0, self.playback_duration)
+
+
+    def on_playback_finished(self):
+
+        duration = self.playback_duration
+
+        self.stop_playback(reset_progress=False)
+        self.update_progress_display(duration, duration)
+
+        self.statusBar().showMessage("播放结束")
 
 
     def update_progress_display(self, position, duration):
@@ -660,58 +894,15 @@ class MainWindow(QMainWindow):
         return f"{seconds // 60:02d}:{seconds % 60:02d}"
 
 
-    def seek_playback(self):
+    def invalidate_playback(self, audio=None):
 
-        if self.playback_audio is None:
-            return
+        self.stop_playback()
 
-        position = self.progress_slider.value() / 1000 * self.playback_duration
+        if audio is None:
+            audio = self.original_audio
 
-        if self.is_playing:
-            self.start_playback(position)
-        else:
-            self.update_progress_display(position, self.playback_duration)
-
-
-    def stop_playback(self, reset_progress=True):
-
-        self.play_timer.stop()
-        stop_audio()
-        self.is_playing = False
-
-        enabled = self.original_audio is not None
-        enabled = enabled and not self.recorder.is_recording and not self.is_processing
-
-        self.play_original_button.setEnabled(enabled)
-        self.play_processed_button.setEnabled(enabled)
-        self.stop_button.setEnabled(False)
-
-        if reset_progress:
-            self.update_progress_display(0, self.playback_duration)
-
-
-    def on_playback_finished(self):
-
-        self.play_timer.stop()
-        self.is_playing = False
-
-        enabled = not self.recorder.is_recording and not self.is_processing
-
-        self.play_original_button.setEnabled(enabled)
-        self.play_processed_button.setEnabled(enabled)
-        self.stop_button.setEnabled(False)
-
-        self.update_progress_display(self.playback_duration, self.playback_duration)
-        self.statusBar().showMessage("播放已结束")
-
-
-    def invalidate_playback(self):
-
-        self.playback_audio = None
-        self.playback_name = ""
-
-        if self.original_audio is not None:
-            self.playback_duration = len(self.original_audio) / self.sample_rate
+        if audio is not None and self.sample_rate is not None:
+            self.playback_duration = len(audio) / self.sample_rate
         else:
             self.playback_duration = 0.0
 
@@ -719,29 +910,31 @@ class MainWindow(QMainWindow):
 
 
     # ==========================================
-    # DSP后台线程管理
+    # DSP后台线程
     # ==========================================
 
-    def apply_processing(self, process_func, description):
+    def apply_processing(self, process_func, description, stage="enhance"):
 
         if self.processed_audio is None or self.recorder.is_recording:
             return
 
         if self.is_processing:
-            QMessageBox.information(self, "提示", "当前音频处理任务尚未完成")
+            QMessageBox.information(self, "提示", "当前处理任务尚未完成")
             return
 
-        self.stop_playback()
-        self.invalidate_playback()
+        self.invalidate_playback(self.processed_audio)
 
-        # 保存处理前状态
+        # 处理前的音频及版本记录
         self.processing_snapshot = (
-            self.processed_audio.copy(),
-            self.operations.copy()
+            self.processed_audio,
+            self.operations.copy(),
+            self.version_snapshots.copy()
         )
-        self.processing_description = description
 
-        # 创建后台工作线程
+        self.processing_description = description
+        self.processing_stage = stage
+
+        # 后台线程
         self.processing_thread = QThread(self)
         self.processing_worker = DSPWorker(self.processed_audio, process_func)
         self.processing_worker.moveToThread(self.processing_thread)
@@ -750,7 +943,6 @@ class MainWindow(QMainWindow):
         self.processing_worker.result_ready.connect(self.on_processing_success)
         self.processing_worker.error_occurred.connect(self.on_processing_error)
 
-        # 结束任务并释放对象
         self.processing_worker.finished.connect(self.processing_thread.quit)
         self.processing_worker.finished.connect(self.processing_worker.deleteLater)
         self.processing_thread.finished.connect(self.processing_thread.deleteLater)
@@ -759,7 +951,7 @@ class MainWindow(QMainWindow):
         self.is_processing = True
         self.set_processing_controls(False)
 
-        self.statusBar().showMessage(f"正在处理：{description} ……")
+        self.statusBar().showMessage(f"正在处理：{description}")
         self.processing_thread.start()
 
 
@@ -769,41 +961,46 @@ class MainWindow(QMainWindow):
         try:
             result = np.asarray(result, dtype=np.float32)
 
-            if result.ndim != 1 or len(result) != len(self.processed_audio):
-                raise ValueError("处理结果的长度或维度错误")
+            # 回声和变速允许改变音频长度
+            if result.ndim != 1 or len(result) == 0:
+                raise ValueError("处理结果维度或长度无效")
 
             if not np.all(np.isfinite(result)):
                 raise ValueError("处理结果包含无效采样值")
 
-            # 峰值保护
-            peak = float(np.max(np.abs(result)))
+            # 保留真实增益，不自动归一化
+            self.processed_audio = result
+            self.operations.append(self.processing_description)
 
-            if peak > 0.98:
-                result = result * (0.98 / peak)
+            # 保存当前阶段的音频快照
+            self.version_snapshots[self.processing_stage] = result
 
-            # 保存撤销记录，最多保留5步
             if self.processing_snapshot is not None:
                 self.undo_stack.append(self.processing_snapshot)
 
             if len(self.undo_stack) > self.max_undo_steps:
                 self.undo_stack.pop(0)
 
-            # 更新处理结果
-            self.processed_audio = result
-            self.operations.append(self.processing_description)
-
             self.process_info.setText(
                 "当前处理：" + " → ".join(self.operations[-3:])
             )
 
-            if self.view_combo.currentIndex() != 1:
-                self.view_combo.setCurrentIndex(1)
-            else:
-                self.update_visualization()
+            self.update_file_info()
+            self.invalidate_playback(self.processed_audio)
 
-            self.statusBar().showMessage(
-                f"处理完成：{self.processing_description}"
-            )
+            self.refresh_version_combo("processed")
+            self.update_visualization()
+
+            peak = float(np.max(np.abs(result)))
+
+            if peak > 1.0:
+                self.statusBar().showMessage(
+                    f"处理完成：{self.processing_description}，注意峰值超过1.0，播放可能失真"
+                )
+            else:
+                self.statusBar().showMessage(
+                    f"处理完成：{self.processing_description}"
+                )
 
         except Exception as error:
             self.on_processing_error(str(error))
@@ -824,84 +1021,101 @@ class MainWindow(QMainWindow):
         self.processing_worker = None
         self.processing_snapshot = None
         self.processing_description = ""
+        self.processing_stage = ""
 
         self.set_processing_controls(True)
 
 
     # ==========================================
-    # DSP处理算法
+    # 增益与归一化
     # ==========================================
 
     def apply_gain_processing(self):
+
+        if self.processed_audio is None or self.is_processing:
+            return
 
         gain = self.control_panel.gain_slider.value() / 100
 
         self.apply_processing(
             lambda audio: apply_gain(audio, gain),
-            f"增益 {gain:.2f}×"
+            f"增益 {gain:.2f}×",
+            stage="enhance"
         )
 
 
     def apply_normalization(self):
 
+        if self.processed_audio is None or self.is_processing:
+            return
+
         self.apply_processing(
             lambda audio: normalize_audio(audio, peak=0.95),
-            "峰值归一化"
+            "峰值归一化",
+            stage="enhance"
         )
 
+
+    # ==========================================
+    # 数字滤波
+    # ==========================================
 
     def apply_filter_processing(self):
 
         if self.sample_rate is None or self.is_processing:
             return
 
-        # 提前读取全部参数，工作线程不访问GUI
         sample_rate = self.sample_rate
         filter_type = self.control_panel.filter_combo.currentIndex()
         low_cutoff = self.control_panel.low_freq_spin.value()
         high_cutoff = self.control_panel.high_freq_spin.value()
-
         nyquist = sample_rate / 2
 
         if filter_type == 0:
             if not 0 < high_cutoff < nyquist:
-                QMessageBox.warning(self, "参数错误", "低通截止频率必须小于奈奎斯特频率")
+                QMessageBox.warning(self, "参数错误", "低通截止频率超出允许范围")
                 return
 
             self.apply_processing(
                 lambda audio: lowpass_filter(audio, sample_rate, high_cutoff),
-                f"低通 {high_cutoff} Hz"
+                f"低通 {high_cutoff} Hz",
+                stage="enhance"
             )
 
         elif filter_type == 1:
             if not 0 < low_cutoff < nyquist:
-                QMessageBox.warning(self, "参数错误", "高通截止频率必须小于奈奎斯特频率")
+                QMessageBox.warning(self, "参数错误", "高通截止频率超出允许范围")
                 return
 
             self.apply_processing(
                 lambda audio: highpass_filter(audio, sample_rate, low_cutoff),
-                f"高通 {low_cutoff} Hz"
+                f"高通 {low_cutoff} Hz",
+                stage="enhance"
             )
 
         else:
             if not 0 < low_cutoff < high_cutoff < nyquist:
-                QMessageBox.warning(self, "参数错误", "请确保 0 < 低截止 < 高截止 < 奈奎斯特频率")
+                QMessageBox.warning(self, "参数错误", "带通截止频率设置无效")
                 return
 
             self.apply_processing(
                 lambda audio: bandpass_filter(
                     audio, sample_rate, low_cutoff, high_cutoff
                 ),
-                f"带通 {low_cutoff}～{high_cutoff} Hz"
+                f"带通 {low_cutoff}～{high_cutoff} Hz",
+                stage="enhance"
             )
 
+
+    # ==========================================
+    # 频谱减法
+    # ==========================================
 
     def apply_denoise_processing(self):
 
         if self.processed_audio is None or self.is_processing:
             return
 
-        # 提前读取全部参数，避免后台线程访问主窗口
         sample_rate = self.sample_rate
         noise_duration = self.control_panel.noise_duration_spin.value()
         alpha = self.control_panel.alpha_spin.value()
@@ -921,7 +1135,126 @@ class MainWindow(QMainWindow):
                 alpha=alpha,
                 beta=beta
             ),
-            f"频谱去噪 α={alpha:.2f}"
+            f"频谱去噪 α={alpha:.2f}",
+            stage="denoise"
+        )
+
+
+    # ==========================================
+    # 音效预设
+    # ==========================================
+
+    def apply_effect_preset(self):
+
+        if self.processed_audio is None or self.is_processing:
+            return
+
+        sample_rate = self.sample_rate
+        preset_name = self.effects_panel.preset_combo.currentText()
+
+        self.apply_processing(
+            lambda audio: apply_preset(audio, sample_rate, preset_name),
+            f"音效预设：{preset_name}",
+            stage="effect"
+        )
+
+
+    # ==========================================
+    # 三段均衡器
+    # ==========================================
+
+    def apply_eq_processing(self):
+
+        if self.processed_audio is None or self.is_processing:
+            return
+
+        sample_rate = self.sample_rate
+        low_db = self.effects_panel.low_slider.value()
+        mid_db = self.effects_panel.mid_slider.value()
+        high_db = self.effects_panel.high_slider.value()
+
+        if low_db == 0 and mid_db == 0 and high_db == 0:
+            QMessageBox.information(self, "提示", "请先调整EQ参数")
+            return
+
+        self.apply_processing(
+            lambda audio: three_band_eq(
+                audio,
+                sample_rate,
+                low_db=low_db,
+                mid_db=mid_db,
+                high_db=high_db
+            ),
+            f"EQ 低频{low_db:+d} 中频{mid_db:+d} 高频{high_db:+d} dB",
+            stage="enhance"
+        )
+
+
+    # ==========================================
+    # 回声效果
+    # ==========================================
+
+    def apply_echo_processing(self):
+
+        if self.processed_audio is None or self.is_processing:
+            return
+
+        sample_rate = self.sample_rate
+        delay = self.effects_panel.delay_spin.value()
+        strength = self.effects_panel.strength_spin.value()
+        repeats = self.effects_panel.repeats_spin.value()
+
+        self.apply_processing(
+            lambda audio: add_echo(
+                audio,
+                sample_rate,
+                delay_ms=delay,
+                strength=strength,
+                repeats=repeats
+            ),
+            f"回声 {delay}ms 强度{strength:.2f} 次数{repeats}",
+            stage="effect"
+        )
+
+
+    # ==========================================
+    # 变速与变调
+    # ==========================================
+
+    def apply_speed_processing(self):
+
+        if self.processed_audio is None or self.is_processing:
+            return
+
+        speed = self.effects_panel.speed_spin.value()
+
+        if abs(speed - 1.0) < 1e-8:
+            QMessageBox.information(self, "提示", "当前播放倍率为1.00×")
+            return
+
+        self.apply_processing(
+            lambda audio: change_speed(audio, speed),
+            f"变速 {speed:.2f}×",
+            stage="effect"
+        )
+
+
+    def apply_pitch_processing(self):
+
+        if self.processed_audio is None or self.is_processing:
+            return
+
+        sample_rate = self.sample_rate
+        semitones = self.effects_panel.pitch_spin.value()
+
+        if semitones == 0:
+            QMessageBox.information(self, "提示", "当前音调变化为0半音")
+            return
+
+        self.apply_processing(
+            lambda audio: change_pitch(audio, sample_rate, semitones),
+            f"变调 {semitones:+d} 半音",
+            stage="effect"
         )
 
 
@@ -939,12 +1272,15 @@ class MainWindow(QMainWindow):
             return
 
         self.stop_playback()
-        self.invalidate_playback()
 
-        audio, operations = self.undo_stack.pop()
+        audio, operations, versions = self.undo_stack.pop()
 
         self.processed_audio = audio
         self.operations = operations
+        self.version_snapshots = versions
+
+        self.update_file_info()
+        self.invalidate_playback(self.processed_audio)
 
         if self.operations:
             self.process_info.setText(
@@ -953,10 +1289,8 @@ class MainWindow(QMainWindow):
         else:
             self.process_info.setText("当前处理：无")
 
-        if self.view_combo.currentIndex() != 1:
-            self.view_combo.setCurrentIndex(1)
-        else:
-            self.update_visualization()
+        self.refresh_version_combo("processed")
+        self.update_visualization()
 
         self.control_panel.undo_button.setEnabled(len(self.undo_stack) > 0)
         self.statusBar().showMessage("已撤销上一步处理")
@@ -968,25 +1302,26 @@ class MainWindow(QMainWindow):
             return
 
         self.stop_playback()
-        self.invalidate_playback()
 
         self.processed_audio = self.original_audio.copy()
         self.operations.clear()
         self.undo_stack.clear()
+        self.version_snapshots.clear()
 
         self.process_info.setText("当前处理：无")
         self.control_panel.undo_button.setEnabled(False)
 
-        if self.view_combo.currentIndex() != 1:
-            self.view_combo.setCurrentIndex(1)
-        else:
-            self.update_visualization()
+        self.update_file_info()
+        self.invalidate_playback(self.original_audio)
 
-        self.statusBar().showMessage("处理结果已重置为原声")
+        self.refresh_version_combo("processed")
+        self.update_visualization()
+
+        self.statusBar().showMessage("已恢复原始音频")
 
 
     # ==========================================
-    # 音频导出
+    # 保存音频
     # ==========================================
 
     def save_processed_audio(self):
@@ -1033,7 +1368,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "处理尚未完成",
-                "请等待当前音频处理任务结束后再关闭程序"
+                "请等待当前DSP处理完成后再关闭窗口"
             )
             event.ignore()
             return
@@ -1043,6 +1378,6 @@ class MainWindow(QMainWindow):
 
         self.record_timer.stop()
         self.play_timer.stop()
-        stop_audio()
+        self.player.stop()
 
         super().closeEvent(event)

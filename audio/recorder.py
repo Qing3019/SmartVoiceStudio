@@ -1,38 +1,33 @@
+
+import queue
+from pathlib import Path
+
+import numpy as np
 import sounddevice as sd
 import soundfile as sf
-import queue
-import numpy as np
 
-from config import SAMPLE_RATE
-from config import RECORD_SECONDS
-from config import CHANNELS
-from config import INPUT_DEVICE
+from config import SAMPLE_RATE, CHANNELS, INPUT_DEVICE
 
-def record_audio(
-        file_path,
-        seconds=RECORD_SECONDS,
-        sample_rate=SAMPLE_RATE,
-        channels=CHANNELS,
-        input_device=INPUT_DEVICE
-):
-    print("开始录音……")
-    # 单声道音频采样，共有 samples 个采样点，并将录音数据存储在 audio 数组中
+
+def record_audio(file_path, seconds=5, sample_rate=SAMPLE_RATE, channels=CHANNELS, input_device=INPUT_DEVICE):
+
+    # 固定时长录音
     audio = sd.rec(
         int(seconds * sample_rate),
         samplerate=sample_rate,
         channels=channels,
-        dtype='float32',
-        device=INPUT_DEVICE
+        dtype="float32",
+        device=input_device
     )
-    
+
     sd.wait()
 
-    print("录音结束。")
+    # 保存录音文件
+    file_path = Path(file_path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # 将录音数据从numpy数组保存为 WAV 文件
     sf.write(file_path, audio, sample_rate)
 
-    print(f"录音已保存到 {file_path}")
     return audio
 
 
@@ -51,7 +46,7 @@ class StreamRecorder:
 
     def audio_callback(self, indata, frames, time_info, status):
 
-        # 回调中只接收音频，不处理GUI
+        # 音频回调只负责接收采样数据
         if status:
             self.overflow_count += 1
 
@@ -61,7 +56,7 @@ class StreamRecorder:
             self.dropped_blocks += 1
 
 
-    def start(self, device=None, sample_rate=44100):
+    def start(self, device=None, sample_rate=SAMPLE_RATE):
 
         if self.is_recording:
             raise RuntimeError("当前已经处于录音状态")
@@ -73,7 +68,7 @@ class StreamRecorder:
         self.overflow_count = 0
         self.dropped_blocks = 0
 
-        # 检查设备是否支持指定采样率
+        # 检查输入设备和采样率
         sd.check_input_settings(
             device=device,
             channels=1,
@@ -138,12 +133,13 @@ class StreamRecorder:
 
         try:
             self.stream.stop()
+
         finally:
             self.stream.close()
             self.stream = None
             self.is_recording = False
 
-        # 取出队列中最后尚未读取的数据
+        # 读取剩余音频数据
         self.read_available()
 
         if not self.audio_chunks:
