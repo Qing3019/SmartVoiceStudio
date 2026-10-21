@@ -4,9 +4,20 @@ from datetime import datetime
 import numpy as np
 from PySide6.QtCore import Qt, QTimer, QThread, Slot
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-    QScrollArea, QFrame, QComboBox, QSlider, QTabWidget, QSplitter,
-    QFileDialog, QMessageBox, QGridLayout
+    QMainWindow,
+    QWidget,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QHBoxLayout,
+    QScrollArea,
+    QFrame,
+    QComboBox,
+    QSlider,
+    QTabWidget,
+    QSplitter,
+    QFileDialog,
+    QMessageBox
 )
 from config import RECORDING_DIR, RESULT_DIR, MAX_RECORD_SECONDS, RECORD_PREVIEW_SECONDS, GUI_UPDATE_INTERVAL
 from audio.devices import get_audio_devices, get_input_sample_rate
@@ -61,203 +72,193 @@ class MainWindow(QMainWindow):
         self.play_timer = QTimer(self)
         self.play_timer.setInterval(GUI_UPDATE_INTERVAL)
         self.play_timer.timeout.connect(self.update_playback)
-        self.tts_thread = None
-        self.tts_worker = None
-        self.tts_busy = False
+
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowTitle("Smart Voice Studio · V0.11")
-        self.resize(1480, 910)
-        self.setMinimumSize(1050, 650)
-        center = QWidget()
-        center.setObjectName("appRoot")
-        self.setCentralWidget(center)
-        root = QVBoxLayout(center)
-        root.setContentsMargins(12, 11, 12, 7)
-        root.setSpacing(9)
 
-        # 固定顶部品牌栏
-        header = QFrame()
-        header.setObjectName("headerBar")
-        header_row = QHBoxLayout(header)
-        header_row.setContentsMargins(19, 11, 19, 11)
-        brand = QVBoxLayout()
-        brand.setSpacing(2)
-        title = QLabel("Smart Voice Studio")
-        title.setObjectName("brandTitle")
-        subtitle = QLabel("音频采集 · 智能增强 · 高级音效 · CosyVoice 3")
-        subtitle.setObjectName("brandSubtitle")
-        brand.addWidget(title)
-        brand.addWidget(subtitle)
-        header_row.addLayout(brand)
-        header_row.addStretch()
-        version = QLabel("V0.11  ·  AUDIO WORKSPACE")
-        version.setObjectName("versionBadge")
-        header_row.addWidget(version)
-        root.addWidget(header)
+        self.setWindowTitle("Smart Voice Studio V0.7")
+        self.resize(1450, 880)
 
-        # 固定操作区：无论左侧展开哪个折叠面板，撤销和保存始终可见
-        transport = QFrame()
-        transport.setObjectName("transportBar")
-        transport_layout = QVBoxLayout(transport)
-        transport_layout.setContentsMargins(12, 11, 12, 9)
-        transport_layout.setSpacing(9)
-        action_row = QHBoxLayout()
-        action_row.setSpacing(7)
-        self.open_button = self.action_button("导入 WAV", "primary")
-        self.record_button = self.action_button("开始录音")
-        self.stop_record_button = self.action_button("停止录音", "danger")
-        self.play_original_button = self.action_button("原声 ▶")
-        self.play_processed_button = self.action_button("处理后 ▶")
-        self.play_selected_button = self.action_button("选中版本 ▶")
-        self.pause_button = self.action_button("暂停")
-        self.stop_button = self.action_button("停止")
-        self.top_undo_button = self.action_button("↶ 撤销", "subtle")
-        self.top_reset_button = self.action_button("重置", "subtle")
-        self.save_button = self.action_button("导出 WAV", "primary")
-        for button in (self.open_button, self.record_button, self.stop_record_button,
-                       self.play_original_button, self.play_processed_button, self.play_selected_button,
-                       self.pause_button, self.stop_button, self.top_undo_button,
-                       self.top_reset_button, self.save_button):
-            action_row.addWidget(button)
-        transport_layout.addLayout(action_row)
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
 
-        timeline = QHBoxLayout()
-        timeline.setSpacing(9)
-        version_label = QLabel("显示版本")
-        version_label.setObjectName("toolbarLabel")
-        self.view_combo = QComboBox()
-        self.view_combo.setMinimumWidth(112)
-        self.view_combo.addItem("原声", "original")
-        self.view_combo.addItem("当前处理", "processed")
-        self.progress_slider = QSlider(Qt.Orientation.Horizontal)
-        self.progress_slider.setRange(0, 1000)
-        self.progress_label = QLabel("00:00 / 00:00")
-        self.progress_label.setMinimumWidth(92)
-        self.progress_label.setObjectName("summaryLabel")
-        self.record_time_label = QLabel("REC  00:00.0")
-        self.record_time_label.setObjectName("summaryLabel")
-        timeline.addWidget(version_label)
-        timeline.addWidget(self.view_combo)
-        timeline.addWidget(self.progress_slider, 1)
-        timeline.addWidget(self.progress_label)
-        timeline.addWidget(self.record_time_label)
-        transport_layout.addLayout(timeline)
-        root.addWidget(transport)
+        main_layout = QHBoxLayout(central_widget)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+        main_layout.setSpacing(10)
 
-        # 左侧只保留可折叠的参数控制区域
-        workspace = QSplitter(Qt.Orientation.Horizontal)
-        workspace.setChildrenCollapsible(False)
-        workspace.setHandleWidth(7)
-        sidebar_frame = QFrame()
-        sidebar_frame.setObjectName("sidebarFrame")
-        sidebar = QVBoxLayout(sidebar_frame)
-        sidebar.setContentsMargins(9, 10, 9, 9)
-        sidebar.setSpacing(7)
-        sidebar_heading = QLabel("创作工具")
-        sidebar_heading.setObjectName("sidebarTitle")
-        sidebar.addWidget(sidebar_heading)
-        sidebar_hint = QLabel("选择工具，点击标题可展开或收起")
-        sidebar_hint.setObjectName("hintLabel")
-        sidebar.addWidget(sidebar_hint)
+        # 左侧滚动区域
         left_scroll = QScrollArea()
         left_scroll.setWidgetResizable(True)
         left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        left_widget = QWidget()
-        left = QVBoxLayout(left_widget)
-        left.setContentsMargins(1, 0, 1, 2)
-        left.setSpacing(5)
 
-        self.tts_panel = TTSPanel()
-        self.control_panel = DSPControlPanel()
-        self.effects_panel = EffectsPanel()
-        self.advanced_effects_panel = AdvancedEffectsPanel()
-        self.control_panel.undo_button.hide()
-        self.control_panel.reset_button.hide()
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(16, 16, 16, 16)
+        left_layout.setSpacing(12)
 
-        device_content = QWidget()
-        device_layout = QVBoxLayout(device_content)
-        device_layout.setContentsMargins(0, 0, 0, 0)
-        device_layout.setSpacing(6)
-        device_layout.addWidget(QLabel("输入设备 / 麦克风"))
+        title = QLabel("Smart Voice Studio")
+        title.setStyleSheet("font-size: 22px; font-weight: bold;")
+        left_layout.addWidget(title)
+
+        subtitle = QLabel("智能人声音效处理平台")
+        left_layout.addWidget(subtitle)
+
+        # 音频设备
+        device_title = QLabel("音频设备管理")
+        device_title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        left_layout.addWidget(device_title)
+
         self.input_combo = QComboBox()
         device_layout.addWidget(self.input_combo)
         device_layout.addWidget(QLabel("输出设备 / 扬声器"))
         self.output_combo = QComboBox()
-        device_layout.addWidget(self.output_combo)
-        self.refresh_button = self.action_button("刷新声卡设备", "subtle")
-        device_layout.addWidget(self.refresh_button)
+        self.refresh_button = QPushButton("刷新音频设备")
 
-        info_content = QWidget()
-        info_layout = QVBoxLayout(info_content)
-        info_layout.setContentsMargins(0, 0, 0, 0)
-        info_layout.setSpacing(7)
+        left_layout.addWidget(QLabel("输入设备"))
+        left_layout.addWidget(self.input_combo)
+        left_layout.addWidget(QLabel("输出设备"))
+        left_layout.addWidget(self.output_combo)
+        left_layout.addWidget(self.refresh_button)
+
+        # 录音
+        record_title = QLabel("麦克风录音")
+        record_title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        left_layout.addWidget(record_title)
+
+        self.record_button = QPushButton("开始录音")
+        self.stop_record_button = QPushButton("停止录音")
+        self.record_time_label = QLabel("录音时长：00:00.0")
+
+        record_layout = QHBoxLayout()
+        record_layout.addWidget(self.record_button)
+        record_layout.addWidget(self.stop_record_button)
+
+        left_layout.addLayout(record_layout)
+        left_layout.addWidget(self.record_time_label)
+
+        # 音频管理
+        audio_title = QLabel("音频管理与播放")
+        audio_title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        left_layout.addWidget(audio_title)
+
+        self.open_button = QPushButton("导入 WAV 音频")
+        self.play_original_button = QPushButton("播放原声")
+        self.play_processed_button = QPushButton("播放处理后")
+        self.play_selected_button = QPushButton("播放当前选中版本")
+        self.pause_button = QPushButton("暂停播放")
+        self.stop_button = QPushButton("停止播放")
+        self.save_button = QPushButton("保存处理结果")
+
+        left_layout.addWidget(self.open_button)
+
+        playback_layout = QHBoxLayout()
+        playback_layout.addWidget(self.play_original_button)
+        playback_layout.addWidget(self.play_processed_button)
+        left_layout.addLayout(playback_layout)
+
+        left_layout.addWidget(self.play_selected_button)
+
+        transport_layout = QHBoxLayout()
+        transport_layout.addWidget(self.pause_button)
+        transport_layout.addWidget(self.stop_button)
+        left_layout.addLayout(transport_layout)
+
+        left_layout.addWidget(self.save_button)
+
+        # 播放进度
+        self.progress_slider = QSlider(Qt.Orientation.Horizontal)
+        self.progress_slider.setRange(0, 1000)
+        self.progress_slider.setValue(0)
+
+        self.progress_label = QLabel("00:00 / 00:00")
+
+        left_layout.addWidget(self.progress_slider)
+        left_layout.addWidget(self.progress_label)
+
+        # 文件信息
+        info_title = QLabel("音频文件信息")
+        info_title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        left_layout.addWidget(info_title)
+
         self.file_info = QLabel("尚未导入音频")
         self.file_info.setWordWrap(True)
-        self.file_info.setObjectName("summaryLabel")
+        left_layout.addWidget(self.file_info)
+
+        # 音频版本管理
+        version_title = QLabel("音频版本管理")
+        version_title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        left_layout.addWidget(version_title)
+
+        self.view_combo = QComboBox()
+        self.view_combo.addItem("原声", "original")
+        self.view_combo.addItem("当前处理", "processed")
+        left_layout.addWidget(self.view_combo)
+
         self.process_info = QLabel("当前处理：无")
         self.process_info.setWordWrap(True)
-        self.process_info.setObjectName("summaryLabel")
-        info_layout.addWidget(self.file_info)
-        info_layout.addWidget(self.process_info)
+        left_layout.addWidget(self.process_info)
 
-        self.sections = {
-            "tts": CollapsibleSection("AI 文字转语音  /  CosyVoice 3", self.tts_panel, expanded=True, subtitle="本机离线多语言 / 中文方言"),
-            "dsp": CollapsibleSection("声音增强与去噪", self.control_panel),
-            "effects": CollapsibleSection("常用音效与均衡器", self.effects_panel),
-            "advanced": CollapsibleSection("高级音效  /  Pedalboard", self.advanced_effects_panel),
-            "devices": CollapsibleSection("音频设备设置", device_content),
-            "info": CollapsibleSection("文件信息与处理记录", info_content)
-        }
-        for section in self.sections.values():
-            left.addWidget(section)
-            section.toggled.connect(lambda expanded, active=section: self.on_section_toggled(active, expanded))
-        left.addStretch()
-        left_scroll.setWidget(left_widget)
-        sidebar.addWidget(left_scroll, 1)
-        workspace.addWidget(sidebar_frame)
+        # DSP控制
+        self.control_panel = DSPControlPanel()
+        left_layout.addWidget(self.control_panel)
 
-        # 右侧保留原有波形、FFT、STFT 和处理前后对比，不改变绘图算法
-        right_frame = QFrame()
-        right_frame.setObjectName("rightFrame")
-        right_layout = QVBoxLayout(right_frame)
-        right_layout.setContentsMargins(9, 9, 9, 8)
-        right_layout.setSpacing(8)
+        # 音效控制
+        self.effects_panel = EffectsPanel()
+        left_layout.addWidget(self.effects_panel)
+
+        left_layout.addStretch()
+        left_scroll.setWidget(left_panel)
+
+        # ==========================================
+        # 右侧标签页
+        # ==========================================
+
         self.analysis_tabs = QTabWidget()
         self.analysis_panel = AudioAnalysisPanel()
-        self.analysis_tabs.addTab(self.analysis_panel, "信号分析  ·  Wave / FFT / STFT")
+        self.analysis_tabs.addTab(self.analysis_panel, "单路信号分析")
+
+        # 标签页二：原声和处理后的双列对比
         compare_widget = QWidget()
         compare_layout = QHBoxLayout(compare_widget)
-        compare_layout.setContentsMargins(4, 7, 4, 4)
+        compare_layout.setContentsMargins(6, 6, 6, 6)
+
         compare_splitter = QSplitter(Qt.Orientation.Horizontal)
-        origin_column = QWidget()
-        origin_layout = QVBoxLayout(origin_column)
-        origin_layout.setContentsMargins(2, 2, 2, 2)
-        origin_label = QLabel("ORIGINAL  ·  原始音频")
-        origin_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        origin_layout.addWidget(origin_label)
+
+        original_column = QWidget()
+        original_layout = QVBoxLayout(original_column)
+        original_layout.setContentsMargins(3, 3, 3, 3)
+
+        original_label = QLabel("原始音频")
+        original_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        original_label.setStyleSheet("font-size: 15px; font-weight: bold;")
+
         self.compare_original_panel = AudioAnalysisPanel()
         origin_layout.addWidget(self.compare_original_panel)
         result_column = QWidget()
         result_layout = QVBoxLayout(result_column)
-        result_layout.setContentsMargins(2, 2, 2, 2)
+        result_layout.setContentsMargins(3, 3, 3, 3)
+
         self.compare_result_label = QLabel("当前处理结果")
         self.compare_result_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         result_layout.addWidget(self.compare_result_label)
         self.compare_result_panel = AudioAnalysisPanel()
         result_layout.addWidget(self.compare_result_panel)
-        compare_splitter.addWidget(origin_column)
-        compare_splitter.addWidget(result_column)
-        compare_splitter.setSizes([520, 520])
-        compare_layout.addWidget(compare_splitter)
-        self.analysis_tabs.addTab(compare_widget, "A / B  ·  处理前后对比")
-        right_layout.addWidget(self.analysis_tabs, 1)
-        workspace.addWidget(right_frame)
-        workspace.setSizes([385, 1080])
-        root.addWidget(workspace, 1)
 
-        # 原有行为与信号一一保留
+        compare_splitter.addWidget(original_column)
+        compare_splitter.addWidget(result_column)
+        compare_splitter.setSizes([500, 500])
+
+        compare_layout.addWidget(compare_splitter)
+        self.analysis_tabs.addTab(compare_widget, "处理前后对比")
+
+        main_layout.addWidget(left_scroll)
+        main_layout.addWidget(self.analysis_tabs, stretch=1)
+
+        # ==========================================
+        # 按钮信号连接
+        # ==========================================
+
         self.refresh_button.clicked.connect(self.refresh_devices)
         self.output_combo.currentIndexChanged.connect(self.on_output_changed)
         self.record_button.clicked.connect(self.start_recording)
@@ -267,109 +268,42 @@ class MainWindow(QMainWindow):
         self.play_processed_button.clicked.connect(self.play_processed)
         self.play_selected_button.clicked.connect(self.play_selected)
         self.pause_button.clicked.connect(self.toggle_pause)
-        self.stop_button.clicked.connect(lambda: self.stop_playback())
+        self.stop_button.clicked.connect(self.stop_playback)
         self.save_button.clicked.connect(self.save_processed_audio)
         self.progress_slider.sliderReleased.connect(self.seek_playback)
         self.view_combo.currentIndexChanged.connect(self.update_visualization)
         self.analysis_tabs.currentChanged.connect(self.update_visualization)
-        self.top_undo_button.clicked.connect(self.undo_processing)
-        self.top_reset_button.clicked.connect(self.reset_processing)
+
+        # DSP
         self.control_panel.gain_button.clicked.connect(self.apply_gain_processing)
         self.control_panel.normalize_button.clicked.connect(self.apply_normalization)
         self.control_panel.filter_button.clicked.connect(self.apply_filter_processing)
         self.control_panel.denoise_button.clicked.connect(self.apply_denoise_processing)
         self.control_panel.undo_button.clicked.connect(self.undo_processing)
         self.control_panel.reset_button.clicked.connect(self.reset_processing)
+
+        # 音效
         self.effects_panel.preset_button.clicked.connect(self.apply_effect_preset)
         self.effects_panel.eq_button.clicked.connect(self.apply_eq_processing)
         self.effects_panel.eq_reset_button.clicked.connect(self.effects_panel.reset_eq_parameters)
         self.effects_panel.echo_button.clicked.connect(self.apply_echo_processing)
         self.effects_panel.speed_button.clicked.connect(self.apply_speed_processing)
         self.effects_panel.pitch_button.clicked.connect(self.apply_pitch_processing)
-        self.advanced_effects_panel.apply_button.clicked.connect(self.apply_advanced_processing)
-        self.tts_panel.synthesize_button.clicked.connect(self.start_tts_synthesis)
+
+        # 初始化
         self.set_audio_controls(False)
         self.stop_record_button.setEnabled(False)
         self.refresh_devices()
-        self.statusBar().showMessage("就绪 · 可以导入音频、开始录音或合成语音")
 
-    def on_section_toggled(self, active, expanded):
-        if not expanded:
-            return
-        for section in self.sections.values():
-            if section is not active and section.is_expanded():
-                section.set_expanded(False)
+        self.statusBar().showMessage("就绪，请录音或导入 WAV")
 
-    def action_button(self, title, role=None):
-        button = QPushButton(title)
-        if role:
-            button.setProperty("role", role)
-        button.setCursor(Qt.CursorShape.PointingHandCursor)
-        return button
 
     # ==========================================
-    # CosyVoice3 TTS，独立线程调用本机服务
+    # 控件状态
     # ==========================================
-    def start_tts_synthesis(self):
-        if self.tts_busy or self.is_processing or self.recorder.is_recording:
-            QMessageBox.warning(self, "任务繁忙", "请等待其他音频任务完成")
-            return
-        try:
-            from tts.client import health
-            info = health(timeout=3)
-            if not info.get("ok"):
-                raise RuntimeError("TTS 服务未准备好")
-            text, ref, ref_text, language, dialect = self.tts_panel.parameters()
-        except Exception as error:
-            QMessageBox.warning(self, "TTS 尚未就绪", str(error))
-            return
-        self.stop_playback()
-        output = RESULT_DIR / f"tts_{datetime.now():%Y%m%d_%H%M%S}.wav"
-        args = dict(text=text, reference_wav=ref, reference_text=ref_text, language=language, dialect=dialect, output_path=str(output), mode=self.tts_panel.selected_mode())
-        self.tts_thread = QThread(self)
-        self.tts_worker = TTSWorker(args)
-        self.tts_worker.moveToThread(self.tts_thread)
-        self.tts_thread.started.connect(self.tts_worker.run)
-        self.tts_worker.completed.connect(self.on_tts_completed)
-        self.tts_worker.failed.connect(self.on_tts_failed)
-        self.tts_worker.finished.connect(self.tts_thread.quit)
-        self.tts_worker.finished.connect(self.tts_worker.deleteLater)
-        self.tts_thread.finished.connect(self.tts_thread.deleteLater)
-        self.tts_thread.finished.connect(self.on_tts_finished)
-        self.tts_busy = True
-        self.set_processing_controls(False)
-        self.tts_panel.synthesize_button.setEnabled(False)
-        self.tts_panel.status_label.setText("CosyVoice3 正在合成，请稍候...")
-        self.tts_thread.start()
-
-    @Slot(str)
-    def on_tts_completed(self, path):
-        try:
-            audio, sample_rate = load_audio(path)
-            self.load_audio_data(audio, sample_rate, path)
-            self.tts_panel.status_label.setText(f"已生成：{Path(path).name}，可继续添加音效")
-        except Exception as error:
-            self.on_tts_failed(str(error))
-
-    @Slot(str)
-    def on_tts_failed(self, error):
-        self.tts_panel.status_label.setText("合成失败，请查看TTS服务终端")
-        QMessageBox.critical(self, "TTS 合成失败", error)
-
-    @Slot()
-    def on_tts_finished(self):
-        self.tts_busy = False
-        self.tts_worker = None
-        self.tts_thread = None
-        self.tts_panel.synthesize_button.setEnabled(True)
-        self.set_processing_controls(True)
-
-    def section_title(self, name):
-        label = QLabel(name)
-        label.setStyleSheet("font-size: 16px; font-weight: bold;")
-        return label
 
     def set_audio_controls(self, enabled):
+
         self.play_original_button.setEnabled(enabled)
         self.play_processed_button.setEnabled(enabled)
         self.play_selected_button.setEnabled(enabled)
@@ -377,10 +311,11 @@ class MainWindow(QMainWindow):
         self.view_combo.setEnabled(enabled)
         self.control_panel.setEnabled(enabled)
         self.effects_panel.setEnabled(enabled)
-        self.advanced_effects_panel.setEnabled(enabled)
-        self.control_panel.undo_button.setEnabled(enabled and bool(self.undo_stack))
-        self.top_undo_button.setEnabled(enabled and bool(self.undo_stack))
-        self.top_reset_button.setEnabled(enabled)
+
+        self.control_panel.undo_button.setEnabled(
+            enabled and len(self.undo_stack) > 0
+        )
+
         self.pause_button.setEnabled(False)
         self.stop_button.setEnabled(False)
         self.progress_slider.setEnabled(False)
@@ -440,7 +375,11 @@ class MainWindow(QMainWindow):
             for control in (self.open_button, self.record_button, self.input_combo, self.output_combo, self.refresh_button):
                 control.setEnabled(False)
             self.stop_record_button.setEnabled(True)
-            self.record_time_label.setText("REC  00:00.0")
+            self.input_combo.setEnabled(False)
+            self.output_combo.setEnabled(False)
+            self.refresh_button.setEnabled(False)
+
+            self.record_time_label.setText("录音时长：00:00.0")
             self.analysis_tabs.setCurrentIndex(0)
             self.analysis_panel.clear_audio()
             self.analysis_panel.waveform_plot.setTitle("Recording - Last 2 Seconds")
@@ -467,7 +406,13 @@ class MainWindow(QMainWindow):
             self.record_preview = self.record_preview[-max_samples:]
             self.analysis_panel.show_waveform(self.record_preview, self.recorder.sample_rate)
         duration = self.recorder.get_duration()
-        self.record_time_label.setText(f"REC  {int(duration // 60):02d}:{duration % 60:04.1f}")
+        minutes = int(duration // 60)
+        seconds = duration % 60
+
+        self.record_time_label.setText(
+            f"录音时长：{minutes:02d}:{seconds:04.1f}"
+        )
+
         if duration >= MAX_RECORD_SECONDS:
             self.stop_recording()
 
@@ -617,7 +562,8 @@ class MainWindow(QMainWindow):
             self.play_original_button.setEnabled(False)
             self.play_processed_button.setEnabled(False)
             self.play_selected_button.setEnabled(False)
-            self.pause_button.setText("暂停")
+
+            self.pause_button.setText("暂停播放")
             self.pause_button.setEnabled(True)
             self.stop_button.setEnabled(True)
             self.progress_slider.setEnabled(True)
@@ -667,7 +613,8 @@ class MainWindow(QMainWindow):
         self.play_original_button.setEnabled(enabled)
         self.play_processed_button.setEnabled(enabled)
         self.play_selected_button.setEnabled(enabled)
-        self.pause_button.setText("暂停")
+
+        self.pause_button.setText("暂停播放")
         self.pause_button.setEnabled(False)
         self.stop_button.setEnabled(False)
         self.progress_slider.setEnabled(False)
@@ -704,7 +651,8 @@ class MainWindow(QMainWindow):
     # DSP 后台执行 + 版本管理
     # ==========================================
     def apply_processing(self, process_func, description, stage="enhance"):
-        if self.processed_audio is None or self.recorder.is_recording or self.is_processing or self.tts_busy:
+
+        if self.processed_audio is None or self.recorder.is_recording:
             return
         self.invalidate_playback(self.processed_audio)
         self.processing_snapshot = (self.processed_audio, self.operations.copy(), self.version_snapshots.copy())
@@ -884,9 +832,10 @@ class MainWindow(QMainWindow):
         self.invalidate_playback(self.processed_audio)
         self.refresh_version_combo("processed")
         self.update_visualization()
-        self.control_panel.undo_button.setEnabled(bool(self.undo_stack))
-        self.top_undo_button.setEnabled(bool(self.undo_stack))
-        self.statusBar().showMessage("已撤销上一步")
+
+        self.control_panel.undo_button.setEnabled(len(self.undo_stack) > 0)
+        self.statusBar().showMessage("已撤销上一步处理")
+
 
     def reset_processing(self):
         if self.original_audio is None or self.is_processing:
@@ -898,7 +847,7 @@ class MainWindow(QMainWindow):
         self.version_snapshots.clear()
         self.process_info.setText("当前处理：无")
         self.control_panel.undo_button.setEnabled(False)
-        self.top_undo_button.setEnabled(False)
+
         self.update_file_info()
         self.invalidate_playback(self.original_audio)
         self.refresh_version_combo("processed")
@@ -924,10 +873,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "保存失败", str(error))
 
     def closeEvent(self, event):
-        if self.tts_busy:
-            QMessageBox.information(self, "正在合成", "请等待TTS任务完成后关闭程序")
-            event.ignore()
-            return
+
         if self.is_processing:
             QMessageBox.information(self, "正在处理", "请等待DSP任务完成后关闭程序")
             event.ignore()
