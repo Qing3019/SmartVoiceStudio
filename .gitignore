@@ -1,24 +1,56 @@
-# Python缓存
+# Python / test cache
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# 虚拟环境
+# Conda / virtual environments
 .venv/
 venv/
 env/
+conda_env/
 
-# PyInstaller打包文件
-dist/
+# PyInstaller / build products
 build/
+dist/
+*.spec
+*.exe
+*.dll
+*.pyd
 
-# 临时文件
+# Models and heavyweight inference files
+pretrained_models/
+models/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.engine
+
+# Local audio output and runtime logs
+results/
+data/recordings/
+runtime_logs/
 *.log
 
-# 运行产生的音频
-data/recordings/
-results/
+# OS / editors / backup files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*_backup.py
+*.bak
+*.tmp
 
-# 模型权重
-models/*.pt
-models/*.pth
+# Local exports / distributions
+*.zip
+*.7z
+*.rar
+
+# Local secrets
+.env
+.env.*
+!.env.example
