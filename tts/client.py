@@ -1,9 +1,11 @@
 """CosyVoice3 本机 TTS 客户端：保留 JSON 协议，显示明确的服务器错误信息。"""
 import json
+import os
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-BASE_URL = "http://127.0.0.1:8765"
+# 启动器根据本地端口注入环境变量；直接运行 GUI 默认 8765。
+BASE_URL = os.getenv("SMARTVOICE_TTS_BASE_URL", "http://127.0.0.1:8765").rstrip("/")
 
 
 def health(timeout=3):

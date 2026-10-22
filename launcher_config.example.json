@@ -1,0 +1,8 @@
+{
+  "cosyvoice_python": "D:\\Anaconda\\envs_dir\\cosyvoice3\\python.exe",
+  "smartvoice_python": "D:\\Anaconda\\envs_dir\\SmartVoiceStudio\\python.exe",
+  "cosyvoice_repo": "E:\\CosyVoiceRuntime\\CosyVoice",
+  "cosyvoice_model": "E:\\CosyVoiceRuntime\\CosyVoice\\pretrained_models\\Fun-CosyVoice3-0.5B",
+  "port": 8765,
+  "start_timeout": 480
+}

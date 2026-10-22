@@ -14,7 +14,6 @@ conda_env/
 # PyInstaller / build products
 build/
 dist/
-*.spec
 *.exe
 *.dll
 *.pyd
@@ -51,6 +50,7 @@ Thumbs.db
 *.rar
 
 # Local secrets
+launcher_config.json
 .env
 .env.*
 !.env.example

@@ -15,7 +15,7 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 
-# 路径配置：其他电脑部署时修改这里，或使用相同名称的环境变量
+# 路径可通过 launcher_config.json 或同名环境变量覆盖，不需要改源码
 COSYVOICE_PYTHON = Path(os.getenv("COSYVOICE_PYTHON", r"D:\Anaconda\envs_dir\cosyvoice3\python.exe"))
 SMARTVOICE_PYTHON = Path(os.getenv("SMARTVOICE_PYTHON", r"D:\Anaconda\envs_dir\SmartVoiceStudio\python.exe"))
 COSYVOICE_REPO = Path(os.getenv("COSYVOICE_REPO", r"E:\CosyVoiceRuntime\CosyVoice"))
@@ -23,6 +23,28 @@ COSYVOICE_MODEL = Path(os.getenv("COSYVOICE_MODEL", r"E:\CosyVoiceRuntime\CosyVo
 HOST = "127.0.0.1"
 PORT = 8765
 START_TIMEOUT = 480  # Intel Arc 电脑当前按 CPU 模式运行，预留模型加载时间
+
+
+def load_launcher_config(project):
+    """优先级：环境变量 > 根目录 launcher_config.json > 内置开发机默认值。"""
+    global COSYVOICE_PYTHON, SMARTVOICE_PYTHON, COSYVOICE_REPO, COSYVOICE_MODEL, PORT, START_TIMEOUT
+    path = project / "launcher_config.json"
+    settings = {}
+    if path.is_file():
+        settings = json.loads(path.read_text(encoding="utf-8-sig"))
+        if not isinstance(settings, dict):
+            raise ValueError("launcher_config.json 必须是 JSON 对象")
+    def choose(key, env, default):
+        value = os.getenv(env, settings.get(key, str(default)))
+        return Path(value).expanduser().resolve()
+    COSYVOICE_PYTHON = choose("cosyvoice_python", "COSYVOICE_PYTHON", COSYVOICE_PYTHON)
+    SMARTVOICE_PYTHON = choose("smartvoice_python", "SMARTVOICE_PYTHON", SMARTVOICE_PYTHON)
+    COSYVOICE_REPO = choose("cosyvoice_repo", "COSYVOICE_REPO", COSYVOICE_REPO)
+    COSYVOICE_MODEL = choose("cosyvoice_model", "COSYVOICE_MODEL", COSYVOICE_MODEL)
+    PORT = int(os.getenv("COSYVOICE_PORT", settings.get("port", PORT)))
+    START_TIMEOUT = int(os.getenv("COSYVOICE_TIMEOUT", settings.get("start_timeout", START_TIMEOUT)))
+    if not (1 <= PORT <= 65535) or START_TIMEOUT <= 0:
+        raise ValueError("端口号或启动超时配置无效")
 
 
 def find_project():
@@ -82,13 +104,16 @@ def stop_process(process):
 
 def main():
     parser = argparse.ArgumentParser(description="一键启动 CosyVoice3 和 SmartVoiceStudio")
-    parser.add_argument("--source", action="store_true", help="强制使用 Python main.py，而不是已打包的 GUI EXE")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--source", action="store_true", help="运行当前 Python main.py（默认，避免误启动旧版 EXE）")
+    mode.add_argument("--exe", action="store_true", help="明确使用 dist/SmartVoiceStudio/SmartVoiceStudio.exe")
     parser.add_argument("--doctor", action="store_true", help="只检查路径和当前服务状态，不启动任何程序")
     args = parser.parse_args()
 
     project = find_project()
+    load_launcher_config(project)
     gui_exe = project / "dist" / "SmartVoiceStudio" / "SmartVoiceStudio.exe"
-    use_exe = gui_exe.is_file() and not args.source
+    use_exe = args.exe
     gui_python_ok = SMARTVOICE_PYTHON.is_file()
     checks = {
         "GUI 源码": project / "main.py",
@@ -99,6 +124,8 @@ def main():
     }
     if not use_exe:
         checks["SmartVoiceStudio 环境 Python"] = SMARTVOICE_PYTHON
+    else:
+        checks["已打包 GUI EXE"] = gui_exe
 
     print(f"工程位置：{project}")
     print(f"GUI 启动方式：{'PyInstaller EXE' if use_exe else 'Python 源码'}")
@@ -124,9 +151,11 @@ def main():
         else:
             print("正在启动 CosyVoice3，请等待模型加载（CPU 模式可能耗时数分钟）...")
             command = [str(COSYVOICE_PYTHON), "-u", "-m", "tts.local_server", "--repo", str(COSYVOICE_REPO), "--model", str(COSYVOICE_MODEL), "--port", str(PORT)]
+            server_env = conda_environment(COSYVOICE_PYTHON)
+            server_env["SMARTVOICE_TTS_OUTPUT_DIR"] = str(project / "results")
             with server_log.open("w", encoding="utf-8") as log_file:
                 flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-                server_process = subprocess.Popen(command, cwd=str(project), env=conda_environment(COSYVOICE_PYTHON), stdout=log_file, stderr=subprocess.STDOUT, creationflags=flags)
+                server_process = subprocess.Popen(command, cwd=str(project), env=server_env, stdout=log_file, stderr=subprocess.STDOUT, creationflags=flags)
 
             start = time.monotonic()
             next_message = start
@@ -150,8 +179,9 @@ def main():
         else:
             cmd = [str(SMARTVOICE_PYTHON), str(project / "main.py")]
             env = conda_environment(SMARTVOICE_PYTHON)
-        # GUI 与源码模式共用项目根目录的 results 和录音文件夹，防止重打包清空音频
+        # 源码/EXE 共用项目目录保存音频；本机服务只允许在受控目录写入结果。
         env["SMARTVOICE_DATA_HOME"] = str(project)
+        env["SMARTVOICE_TTS_BASE_URL"] = f"http://{HOST}:{PORT}"
         print("正在启动 SmartVoiceStudio GUI...")
         gui_process = subprocess.Popen(cmd, cwd=str(project), env=env)
         gui_code = gui_process.wait()
@@ -170,6 +200,6 @@ def main():
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except (FileNotFoundError, TimeoutError, RuntimeError, OSError) as exc:
+    except (FileNotFoundError, TimeoutError, RuntimeError, OSError, ValueError) as exc:
         print(f"\n启动失败：{exc}", file=sys.stderr)
         sys.exit(1)

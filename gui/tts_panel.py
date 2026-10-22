@@ -1,5 +1,6 @@
 """CosyVoice3 多语言 TTS 面板：紧凑布局、示例文本与语言模式联动。"""
 from pathlib import Path
+from tts.client import BASE_URL
 import re
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout, QLabel,
@@ -109,7 +110,7 @@ class TTSPanel(QWidget):
         self.synthesize_button.setProperty("role", "primary")
         self.synthesize_button.setMinimumHeight(40)
         layout.addWidget(self.synthesize_button)
-        self.status_label = QLabel("本机服务 127.0.0.1:8765 · 等待合成")
+        self.status_label = QLabel(f"本机服务 {BASE_URL} · 等待合成")
         self.status_label.setObjectName("helperText")
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)

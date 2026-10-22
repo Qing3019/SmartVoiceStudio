@@ -1,8 +1,9 @@
-"""SmartVoiceStudio V0.11 桌面应用入口与统一视觉主题。"""
+"""SmartVoiceStudio 桌面入口；视觉样式和版本号统一管理。"""
 import sys
 from PySide6.QtWidgets import QApplication
 import pyqtgraph as pg
 from gui.main_window import MainWindow
+from app_version import APP_VERSION
 
 
 STYLE = """
@@ -60,6 +61,7 @@ QStatusBar { color: #73809a; background: #f3f6fc; }
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Smart Voice Studio")
+    app.setApplicationVersion(APP_VERSION)
     app.setStyle("Fusion")
     app.setStyleSheet(STYLE)
     pg.setConfigOptions(antialias=True, background="#ffffff", foreground="#52627a")

@@ -1,5 +1,6 @@
 """SmartVoiceStudio 的 CosyVoice3 本机离线 TTS 服务（在 cosyvoice3 环境运行）。"""
 import argparse
+import os
 import json
 import sys
 import threading
@@ -150,7 +151,10 @@ def run_inference(model, text, reference_text, reference_wav, language, dialect,
     return result
 
 
-def make_handler(model):
+def make_handler(model, output_root=None):
+    # 只允许在本机受控目录生成 WAV，防止请求参数误覆盖任意文件
+    output_root = Path(output_root or os.getenv("SMARTVOICE_TTS_OUTPUT_DIR", str(Path.cwd() / "results"))).expanduser().resolve()
+    output_root.mkdir(parents=True, exist_ok=True)
     inference_lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
@@ -191,6 +195,8 @@ def make_handler(model):
                     raise ValueError("请提供有效的参考 WAV 文件")
                 if output_path.suffix.lower() != ".wav":
                     raise ValueError("输出必须为 WAV 文件")
+                if not output_path.is_relative_to(output_root):
+                    raise ValueError(f"输出路径必须位于受控目录：{output_root}")
 
                 # 先验证策略和文本要求，再进入单机大模型的串行推理
                 selected_mode, _ = prepare_inference(text, reference_text, language, dialect, mode=mode)
